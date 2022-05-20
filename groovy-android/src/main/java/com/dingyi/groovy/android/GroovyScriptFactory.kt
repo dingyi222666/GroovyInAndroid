@@ -148,7 +148,11 @@ class GroovyScriptFactory(
     fun run(scriptFile: File, classLoader: ClassLoader): EvalResult {
         val scriptText = scriptFile.readText()
         val outputFile =
-            compileTmpDir.resolve("${System.currentTimeMillis()}-groovy-run-${scriptFile}-dex.jar")
+            compileTmpDir.resolve(calculateMd5(scriptText.encodeToByteArray()) + ".jar")
+
+        if (outputFile.exists()) {
+            return loadDex(outputFile, classLoader)
+        }
         return evaluate(scriptText, outputFile, scriptFile.name, classLoader)
     }
 
