@@ -52,7 +52,7 @@ class GroovyScriptFactory(
         val dexBuilder = D8Command.builder()
             .apply {
                 disableDesugaring = true
-                minApiLevel = 21
+                minApiLevel = 26
                 setOutput(
                     outputFile.toPath(),
                     OutputMode.DexIndexed
@@ -78,6 +78,7 @@ class GroovyScriptFactory(
 
         groovyClassLoader
             .parseClass(scriptText, fileName)
+
 
         D8.run(dexBuilder.build())
 
