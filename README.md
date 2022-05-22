@@ -5,7 +5,7 @@ Run Groovy In Android
 ### How to use
 
 ```groovy
-implementation "io.github.dingyi222666:groovy-android:1.0.1"
+implementation "io.github.dingyi222666:groovy-android:1.0.2"
 ```
 
 ```kotlin
