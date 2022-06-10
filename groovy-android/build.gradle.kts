@@ -1,8 +1,8 @@
 import java.util.Properties
 
 plugins {
-    id("com.android.library")
-    id("kotlin-android")
+    kotlin("jvm")
+    /*id("kotlin-jvm")*/
     id("maven-publish")
     id("signing")
 }
@@ -12,7 +12,7 @@ plugins {
 extra.apply {
     set("PUBLISH_GROUP_ID", "io.github.dingyi222666")
     set("PUBLISH_ARTIFACT_ID", "groovy-android")
-    set("PUBLISH_VERSION", "1.0.2")
+    set("PUBLISH_VERSION", "1.0.3")
     extra["signing.keyId"] = ""
     extra["signing.password"] = ""
     extra["signing.secretKeyRingFile"] = ""
@@ -34,50 +34,36 @@ if (secretPropsFile.exists()) {
 }
 
 
-android {
-    compileSdk = 31
+java {
 
-    defaultConfig {
-        minSdk = 26
-        targetSdk = 31
-    }
+    withSourcesJar()
+    withJavadocJar()
 
-    buildTypes {
-        release {
-            isMinifyEnabled = false
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
-            )
-        }
-        debug {
-            ndk {
-                abiFilters.addAll(arrayOf("armeabi-v7a", "arm64-v8a"))
-            }
-        }
-    }
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_1_8
-        targetCompatibility = JavaVersion.VERSION_1_8
+    targetCompatibility = JavaVersion.VERSION_11
+    sourceCompatibility = JavaVersion.VERSION_1_8
+}
+
+
+tasks.withType(Javadoc::class.java) {
+    options {
+        encoding = "UTF-8"
+
+        memberLevel = JavadocMemberLevel.PUBLIC
     }
 
-    publishing {
-        singleVariant("release") {
-            withSourcesJar()
-            withJavadocJar()
-        }
-        // ...
-    }
+    isFailOnError = false
+
 }
 
 dependencies {
-    implementation ("com.android.tools:r8:3.3.28")
-    api ("org.codehaus.groovy:groovy:3.0.9:grooid")
+    compileOnly(files("libs/android.jar"))
+    implementation("com.android.tools:r8:3.3.28")
+    api("org.codehaus.groovy:groovy:3.0.9:grooid")
 }
 
 
-
 afterEvaluate {
+
     publishing {
         publications {
             register("release", MavenPublication::class) {
@@ -87,7 +73,7 @@ afterEvaluate {
                 version = project.ext["PUBLISH_VERSION"].toString()
 
                 //sources jar and java doc
-                from(components.getByName("release"))
+                from(components.getByName("java"))
 
                 //artifact("$buildDir/outputs/aar/${project.getName()}-release.aar")
 

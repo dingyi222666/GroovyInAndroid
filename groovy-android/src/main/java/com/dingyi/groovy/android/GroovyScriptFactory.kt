@@ -3,22 +3,15 @@ package com.dingyi.groovy.android
 import android.util.Log
 import com.android.tools.r8.*
 import com.android.tools.r8.origin.Origin
-import dalvik.system.DexClassLoader
 import dalvik.system.DexFile
-import dalvik.system.InMemoryDexClassLoader
 import groovy.lang.GrooidClassLoader
 import groovy.lang.Script
-import groovy.util.Eval
-import groovy.util.GroovyScriptEngine
 import org.codehaus.groovy.control.CompilerConfiguration
 import java.io.File
-import java.lang.Exception
-import java.nio.ByteBuffer
 
 class GroovyScriptFactory(
-    private val compileTmpDir: File,
+    private val compileDir: File = AppDataDirGuesser().guess(),
 ) {
-
 
     private fun calculateMd5(bytes: ByteArray): String {
         val md5 = java.security.MessageDigest.getInstance("MD5")
@@ -35,20 +28,13 @@ class GroovyScriptFactory(
         return hexString.toString()
     }
 
-    /**
-     * evaluate groovy script text
-     * @param scriptText groovy script text
-     * @param classLoader classloader
-     * @param fileName script file name
-     * @param outputFile dex output file
-     * @return script result
-     */
-    fun evaluate(
-        scriptText: String,
-        outputFile: File,
+
+    private fun createScriptClassLoader(
+        scriptText: String, outputFile: File,
         fileName: String = "AnonymousGroovyScript",
         classLoader: ClassLoader = this.javaClass.classLoader
-    ): EvalResult {
+    ): EvalResult<Pair<DexClassLoader, MutableList<String>>> {
+
         val dexBuilder = D8Command.builder()
             .apply {
                 disableDesugaring = true
@@ -82,33 +68,121 @@ class GroovyScriptFactory(
 
         D8.run(dexBuilder.build())
 
-        return loadDex(outputFile, classLoader)
+        return kotlin.runCatching {
+            EvalResult.successWithType(
+                DexClassLoader(
+                    outputFile
+                        .absolutePath, null, null, classLoader
+                ) to classNameList
+            )
+        }.getOrElse {
+            EvalResult.failureWithType(it)
+        }
     }
 
-    private fun loadDex(dexFile: File, classLoader: ClassLoader): EvalResult {
+    fun createScript(
+        scriptText: String, outputFile: File,
+        fileName: String = "AnonymousGroovyScript",
+        classLoader: ClassLoader = this.javaClass.classLoader
+    ): EvalResult<Script> {
+        val (classLoader, classNameList) = createScriptClassLoader(
+            scriptText, outputFile, fileName, classLoader
+        ).success()
 
-        val dexFile = DexFile(dexFile.absolutePath)
+        return loadScriptFromClassLoader(classLoader, classNameList)
 
-        dexFile.entries().asSequence().forEach {
-            val scriptClass = dexFile.loadClass(it, classLoader)
+    }
+
+
+    private fun loadScriptFromClassLoader(
+        classLoader: ClassLoader,
+        loadClassList: List<String>
+    ): EvalResult<Script> {
+        loadClassList.forEach {
+            val scriptClass = classLoader.loadClass(it)
             if (Script::class.java.isAssignableFrom(scriptClass)) {
-                return try {
-                    val script = scriptClass.newInstance() as Script
-                    EvalResult.success(script.run())
-                } catch (e: IllegalAccessException) {
-                    EvalResult.error(e)
-                } catch (e: InstantiationException) {
-                    EvalResult.error(e)
+                val newInstanceResult = kotlin.runCatching {
+                    scriptClass.newInstance() as Script
+                }
+                return if (newInstanceResult.isSuccess) {
+                    EvalResult.successWithType(newInstanceResult.getOrThrow())
+                } else {
+                    EvalResult.failureWithType(checkNotNull(newInstanceResult.exceptionOrNull()))
                 }
             }
         }
+        return EvalResult.failureWithType(ClassNotFoundException("No found script class in dex file"))
+    }
 
-        return EvalResult.error(Exception("No script found"))
+
+    private fun getDexClassList(dexFile: File): List<String> {
+        val dex = DexFile(dexFile)
+
+        val classNameList = dex.entries().toList()
+
+        dex.close()
+        return classNameList
+    }
+
+    private fun getScriptClassLoader(
+        dexFile: File,
+        classLoader: ClassLoader
+    ): Pair<DexClassLoader, List<String>> {
+        return DexClassLoader(dexFile.absolutePath, null, null, classLoader) to getDexClassList(
+            dexFile
+        )
+    }
+
+    private fun loadScriptFromDex(
+        dexFile: File,
+        classLoader: ClassLoader
+    ): EvalResult<Script> {
+
+
+        return loadScriptFromClassLoader(classLoader, getDexClassList(dexFile))
+
+    }
+
+    fun loadScript(script: Script): EvalResult<Any> {
+        return kotlin.runCatching {
+            EvalResult.success(script.run())
+        }.getOrElse {
+            EvalResult.failureWithType(it)
+        }
+    }
+
+    private fun loadEvalResultScript(result: EvalResult<Script>): EvalResult<Any> {
+        return if (result.isSuccess()) {
+            loadScript(result.success())
+        } else {
+            EvalResult.failureWithType(checkNotNull(result.failure))
+        }
     }
 
     /**
      * evaluate groovy script text
-     * @param scriptText groovy script text
+     * @param scriptext groovy script text
+     * @param classLoader classloader
+     * @param fileName script file name
+     * @param outputFile dex output file
+     * @return script result
+     */
+    fun evaluate(
+        scriptText: String,
+        outputFile: File,
+        fileName: String = "AnonymousGroovyScript",
+        classLoader: ClassLoader = this.javaClass.classLoader
+    ): EvalResult<Any> {
+
+        val result = createScript(scriptText, outputFile, fileName, classLoader)
+
+        return loadEvalResultScript(result)
+    }
+
+
+    /**
+     * evaluate groovy script text
+     * @param scriptext groovy script text
      * @param classLoader classloader
      * @param fileName script file name
      * @return script result
@@ -117,13 +191,14 @@ class GroovyScriptFactory(
         scriptText: String,
         fileName: String = "AnonymousGroovyScript",
         classLoader: ClassLoader = this.javaClass.classLoader
-    ): EvalResult {
+    ): EvalResult<Any> {
 
         val outputFile =
-            compileTmpDir.resolve(calculateMd5(scriptText.encodeToByteArray()) + ".jar")
+            compileDir.resolve(calculateMd5(scriptText.encodeToByteArray()) + ".jar")
 
         if (outputFile.exists()) {
-            return loadDex(outputFile, classLoader)
+            // in future, DexFile will remove in the android, this method will throw exception
+            return loadEvalResultScript(loadScriptFromDex(outputFile, classLoader))
         }
 
         return evaluate(scriptText, outputFile, fileName, classLoader)
@@ -136,7 +211,7 @@ class GroovyScriptFactory(
      * @param classLoader classloader
      * @return script result
      */
-    fun run(scriptFile: File, outputFile: File, classLoader: ClassLoader): EvalResult {
+    fun run(scriptFile: File, outputFile: File, classLoader: ClassLoader): EvalResult<Any> {
         val scriptText = scriptFile.readText()
         return evaluate(scriptText, outputFile, scriptFile.name, classLoader)
     }
@@ -146,46 +221,77 @@ class GroovyScriptFactory(
      * @param scriptFile groovy file
      * @param classLoader classloader
      */
-    fun run(scriptFile: File, classLoader: ClassLoader): EvalResult {
+    fun run(scriptFile: File, classLoader: ClassLoader): EvalResult<Any> {
         val scriptText = scriptFile.readText()
         val outputFile =
-            compileTmpDir.resolve(calculateMd5(scriptText.encodeToByteArray()) + ".jar")
+            compileDir.resolve(calculateMd5(scriptText.encodeToByteArray()) + ".jar")
 
         if (outputFile.exists()) {
-            return loadDex(outputFile, classLoader)
+            // in future, DexFile will remove in the android, this method will throw exception
+            return loadEvalResultScript(loadScriptFromDex(outputFile, classLoader))
         }
         return evaluate(scriptText, outputFile, scriptFile.name, classLoader)
     }
 
 
-    class EvalResult(
-        val result: Any? = null,
-        val error: Throwable? = null
+    fun getScriptClassLoader(
+        scriptText: String,
+        fileName: String = "AnonymousGroovyScript",
+        classLoader: ClassLoader = this.javaClass.classLoader
+    ): Pair<ClassLoader, List<String>> {
+        val outputFile =
+            compileDir.resolve(calculateMd5(scriptText.encodeToByteArray()) + ".jar")
+        if (outputFile.exists()) {
+            // in future, DexFile will remove in the android, this method will throw exception
+            return getScriptClassLoader(outputFile, classLoader)
+        }
+
+        return createScriptClassLoader(scriptText, outputFile, fileName, classLoader)
+            .success()
+
+    }
+
+
+    class EvalResult<T>(
+        val result: T? = null,
+        val failure: Throwable? = null
     ) {
 
         companion object {
-            fun success(result: Any?): EvalResult {
+
+            fun success(result: Any?): EvalResult<Any> {
                 return EvalResult(result)
             }
 
-            fun error(error: Throwable): EvalResult {
-                return EvalResult(error = error)
+            fun failure(error: Throwable): EvalResult<Any> {
+                return EvalResult(failure = error)
+            }
+
+            inline fun <reified T> successWithType(result: T): EvalResult<T> {
+                return EvalResult(result)
+            }
+
+            inline fun <reified T> failureWithType(error: Throwable): EvalResult<T> {
+                return EvalResult(failure = error)
             }
         }
 
-        fun success(): Any {
-            if (error != null) {
-                throw error
+        /**
+         * Get the result if the result is success, otherwise throw exception
+         */
+        fun success(): T {
+            if (failure != null) {
+                throw failure
             }
             return checkNotNull(result)
         }
 
         fun isSuccess(): Boolean {
-            return error == null
+            return failure == null
         }
 
-        fun isError(): Boolean {
-            return error != null
+        fun isFailure(): Boolean {
+            return failure != null
         }
 
     }

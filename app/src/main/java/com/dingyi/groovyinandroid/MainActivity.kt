@@ -18,11 +18,7 @@ class MainActivity : AppCompatActivity(), View.OnClickListener {
 
         findViewById<View>(R.id.test).setOnClickListener(this)
 
-        scriptFactory = GroovyScriptFactory(
-            getExternalFilesDir("groovy-test")?.apply {
-                mkdirs()
-            } ?: error("")
-        )
+        scriptFactory = GroovyScriptFactory()
 
     }
 

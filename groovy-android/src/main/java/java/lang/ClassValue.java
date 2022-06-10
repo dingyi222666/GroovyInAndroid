@@ -19,7 +19,7 @@ public abstract class ClassValue<T> {
      * <p>
      * Normally, this method is invoked at most once per class,
      * but it may be invoked again if there has been a call to
-     * {@link #remove remove}.
+     * .
      * <p>
      * If this method throws an exception, the corresponding call to {@code get}
      * will terminate abnormally with that exception, and no class value will be recorded.
@@ -27,7 +27,6 @@ public abstract class ClassValue<T> {
      * @param type the type whose class value must be computed
      * @return the newly computed value associated with this {@code ClassValue}, for the given class or interface
      * @see #get
-     * @see #remove
      */
     protected abstract T computeValue(Class<?> type);
 
@@ -49,12 +48,11 @@ public abstract class ClassValue<T> {
      * state diagram:  uninitialized and initialized.
      * When {@code remove} calls are made,
      * the rules for value observation are more complex.
-     * See the documentation for {@link #remove remove} for more information.
+     * See the documentation for  for more information.
      *
      * @param type the type whose class value must be computed or retrieved
      * @return the current value associated with this {@code ClassValue}, for the given class or interface
      * @throws NullPointerException if the argument is null
-     * @see #remove
      * @see #computeValue
      */
     public T get(Class<?> type) {

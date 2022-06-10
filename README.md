@@ -1,19 +1,16 @@
 # GroovyInAndroid
 
-Run Groovy In Android
+Run Groovy on Android , compile groovy code to dex using D8 and run it in Android.
+
 
 ### How to use
 
 ```groovy
-implementation "io.github.dingyi222666:groovy-android:1.0.2"
+implementation "io.github.dingyi222666:groovy-android:1.0.3"
 ```
 
 ```kotlin
- val scriptFactory = GroovyScriptFactory(
-    getExternalFilesDir("groovy-test")?.apply {
-        mkdirs()
-    } ?: error("")
-)
+ val scriptFactory = GroovyScriptFactory()
 scriptFactory
     .evaluate(
         """
