@@ -12,13 +12,16 @@ plugins {
 extra.apply {
     set("PUBLISH_GROUP_ID", "io.github.dingyi222666")
     set("PUBLISH_ARTIFACT_ID", "groovy-android")
-    set("PUBLISH_VERSION", "1.0.4")
+    set("PUBLISH_VERSION", "1.0.4-SNAPSHOT")
     extra["signing.keyId"] = ""
     extra["signing.password"] = ""
     extra["signing.secretKeyRingFile"] = ""
     extra["ossrhUsername"] = ""
     extra["ossrhPassword"] = ""
 }
+
+version = ext["PUBLISH_VERSION"] ?: ""
+
 
 val secretPropsFile = project.rootProject.file("local.properties")
 
