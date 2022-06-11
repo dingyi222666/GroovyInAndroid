@@ -22,7 +22,7 @@ import java.util.*
 /**
  * Dynamic load to the memory,only support api 26+
  * */
-class DynamicGrooidDexClassLoader(loader: ClassLoader, config: CompilerConfiguration? = null) :
+open class DynamicGrooidDexClassLoader(loader: ClassLoader, config: CompilerConfiguration? = null) :
     GroovyClassLoader(loader, config) {
 
     private val findResourceMethod = ClassLoader::class.java

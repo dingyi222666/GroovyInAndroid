@@ -11,7 +11,7 @@ import java.lang.Exception
 import java.security.AccessController
 import java.security.PrivilegedAction
 
-class GrooidClassLoader(loader: ClassLoader, config: CompilerConfiguration? = null) :
+open class GrooidClassLoader(loader: ClassLoader, config: CompilerConfiguration? = null) :
     GroovyClassLoader(loader, config) {
     override fun createCollector(unit: CompilationUnit, su: SourceUnit): ClassCollector {
         val loader = AccessController.doPrivileged(
