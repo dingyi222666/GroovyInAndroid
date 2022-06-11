@@ -1,34 +1,27 @@
-package groovy.lang;
+package groovy.lang
 
-import org.codehaus.groovy.ast.ClassNode;
-import org.codehaus.groovy.control.CompilationUnit;
-import org.codehaus.groovy.control.CompilerConfiguration;
-import org.codehaus.groovy.control.SourceUnit;
+import groovy.lang.GroovyClassLoader
+import org.codehaus.groovy.control.CompilationUnit
+import org.codehaus.groovy.control.SourceUnit
+import groovy.lang.GroovyClassLoader.ClassCollector
+import groovyjarjarasm.asm.ClassWriter
+import org.codehaus.groovy.ast.ClassNode
+import org.codehaus.groovy.control.CompilerConfiguration
+import java.lang.Exception
+import java.security.AccessController
+import java.security.PrivilegedAction
 
-import java.security.AccessController;
-import java.security.PrivilegedAction;
-
-import groovyjarjarasm.asm.ClassWriter;
-
-public class GrooidClassLoader extends GroovyClassLoader {
-
-    public GrooidClassLoader(ClassLoader loader, CompilerConfiguration config) {
-        super(loader, config);
-    }
-
-    @Override
-    protected ClassCollector createCollector(CompilationUnit unit, SourceUnit su) {
-        InnerLoader loader = AccessController.doPrivileged((PrivilegedAction<InnerLoader>) () -> new InnerLoader(GrooidClassLoader.this));
-        //noinspection rawtypes
-        return new ClassCollector(loader, unit, su) {
-            @Override
-            protected Class onClassNode(ClassWriter classWriter, ClassNode classNode) {
-                try {
-                    return super.onClassNode(classWriter, classNode);
-                } catch (Exception e) {
-                    return null;
-                }
+class GrooidClassLoader(loader: ClassLoader, config: CompilerConfiguration? = null) :
+    GroovyClassLoader(loader, config) {
+    override fun createCollector(unit: CompilationUnit, su: SourceUnit): ClassCollector {
+        val loader = AccessController.doPrivileged(
+            PrivilegedAction { InnerLoader(this@GrooidClassLoader) })
+        return object : ClassCollector(loader, unit, su) {
+            override fun onClassNode(classWriter: ClassWriter, classNode: ClassNode): Class<*>? {
+                return runCatching {
+                    super.onClassNode(classWriter, classNode)
+                }.getOrNull()
             }
-        };
+        }
     }
 }
