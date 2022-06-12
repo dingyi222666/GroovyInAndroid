@@ -12,7 +12,7 @@ plugins {
 extra.apply {
     set("PUBLISH_GROUP_ID", "io.github.dingyi222666")
     set("PUBLISH_ARTIFACT_ID", "groovy-android")
-    set("PUBLISH_VERSION", "1.0.4-SNAPSHOT")
+    set("PUBLISH_VERSION", "1.0.5")
     extra["signing.keyId"] = ""
     extra["signing.password"] = ""
     extra["signing.secretKeyRingFile"] = ""
@@ -61,7 +61,7 @@ tasks.withType(Javadoc::class.java) {
 dependencies {
     compileOnly(files("libs/android.jar"))
     implementation("com.android.tools:r8:3.3.28")
-    api("org.codehaus.groovy:groovy:3.0.9:grooid")
+    api("org.codehaus.groovy:groovy:3.0.7:grooid")
 }
 
 

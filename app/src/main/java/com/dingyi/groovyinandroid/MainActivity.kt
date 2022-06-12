@@ -27,6 +27,7 @@ class MainActivity : AppCompatActivity(), View.OnClickListener {
 
         findViewById<View>(R.id.test).setOnClickListener(this)
 
+
         scriptFactory = GroovyScriptFactory()
 
     }

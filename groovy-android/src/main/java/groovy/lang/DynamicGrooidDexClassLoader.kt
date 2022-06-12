@@ -25,7 +25,7 @@ import java.util.*
 open class DynamicGrooidDexClassLoader(
     loader: ClassLoader,
     config: CompilerConfiguration? = null,
-    useConfigurationClasspath: Boolean
+    useConfigurationClasspath: Boolean = false,
 ) :
     GroovyClassLoader(loader, config, false) {
 
@@ -110,7 +110,7 @@ open class DynamicGrooidDexClassLoader(
 
         D8.run(dexBuilder.build())
 
-        return DexClassLoader(dexBuilder.outputPath.toFile().absolutePath, null, null, this)
+        return DexClassLoader(dexBuilder.outputPath.toFile().absolutePath, null, null, this.javaClass.classLoader)
     }
 
     override fun findClass(name: String): Class<*>? {

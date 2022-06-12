@@ -1,15 +1,59 @@
+/*
+ * Copyright (c) 2010, 2013, Oracle and/or its affiliates. All rights reserved.
+ * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+ *
+ * This code is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 only, as
+ * published by the Free Software Foundation.  Oracle designates this
+ * particular file as subject to the "Classpath" exception as provided
+ * by Oracle in the LICENSE file that accompanied this code.
+ *
+ * This code is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+ * version 2 for more details (a copy is included in the LICENSE file that
+ * accompanied this code).
+ *
+ * You should have received a copy of the GNU General Public License version
+ * 2 along with this work; if not, write to the Free Software Foundation,
+ * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+ *
+ * Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
+ * or visit www.oracle.com if you need additional information or have any
+ * questions.
+ */
+
 package java.lang;
 
-import static java.lang.ClassValue.ClassValueMap.*;
-
-import java.lang.ref.WeakReference;
 import java.util.Map;
 import java.util.WeakHashMap;
+import java.lang.ref.WeakReference;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static java.lang.ClassValue.ClassValueMap.probeHomeLocation;
+import static java.lang.ClassValue.ClassValueMap.probeBackupLocations;
+
+/**
+ * Lazily associate a computed value with (potentially) every type.
+ * For example, if a dynamic language needs to construct a message dispatch
+ * table for each class encountered at a message send call site,
+ * it can use a {@code ClassValue} to cache information needed to
+ * perform the message send quickly, for each class encountered.
+ *
+ * @author John Rose, JSR 292 EG
+ * @since 1.7
+ */
 public abstract class ClassValue<T> {
 
     private static final Map<Class<?>, ClassValueMap> MAP_CACHE = new WeakHashMap<>();
+
+
+    /**
+     * Sole constructor.  (For invocation by subclass constructors, typically
+     * implicit.)
+     */
+    protected ClassValue() {
+    }
 
     /**
      * Computes the given class's derived value for this {@code ClassValue}.
@@ -19,7 +63,7 @@ public abstract class ClassValue<T> {
      * <p>
      * Normally, this method is invoked at most once per class,
      * but it may be invoked again if there has been a call to
-     * .
+     * {@link #remove remove}.
      * <p>
      * If this method throws an exception, the corresponding call to {@code get}
      * will terminate abnormally with that exception, and no class value will be recorded.
@@ -27,6 +71,7 @@ public abstract class ClassValue<T> {
      * @param type the type whose class value must be computed
      * @return the newly computed value associated with this {@code ClassValue}, for the given class or interface
      * @see #get
+     * @see #remove
      */
     protected abstract T computeValue(Class<?> type);
 
@@ -48,11 +93,12 @@ public abstract class ClassValue<T> {
      * state diagram:  uninitialized and initialized.
      * When {@code remove} calls are made,
      * the rules for value observation are more complex.
-     * See the documentation for  for more information.
+     * See the documentation for {@link #remove remove} for more information.
      *
      * @param type the type whose class value must be computed or retrieved
      * @return the current value associated with this {@code ClassValue}, for the given class or interface
      * @throws NullPointerException if the argument is null
+     * @see #remove
      * @see #computeValue
      */
     public T get(Class<?> type) {
@@ -74,8 +120,91 @@ public abstract class ClassValue<T> {
         return getFromBackup(cache, type);
     }
 
-    /** Initial, one-element, empty cache used by all Class instances.  Must never be filled. */
-    private static final Entry<?>[] EMPTY_CACHE = { null };
+    /**
+     * Removes the associated value for the given class.
+     * If this value is subsequently {@linkplain #get read} for the same class,
+     * its value will be reinitialized by invoking its {@link #computeValue computeValue} method.
+     * This may result in an additional invocation of the
+     * {@code computeValue} method for the given class.
+     * <p>
+     * In order to explain the interaction between {@code get} and {@code remove} calls,
+     * we must model the state transitions of a class value to take into account
+     * the alternation between uninitialized and initialized states.
+     * To do this, number these states sequentially from zero, and note that
+     * uninitialized (or removed) states are numbered with even numbers,
+     * while initialized (or re-initialized) states have odd numbers.
+     * <p>
+     * When a thread {@code T} removes a class value in state {@code 2N},
+     * nothing happens, since the class value is already uninitialized.
+     * Otherwise, the state is advanced atomically to {@code 2N+1}.
+     * <p>
+     * When a thread {@code T} queries a class value in state {@code 2N},
+     * the thread first attempts to initialize the class value to state {@code 2N+1}
+     * by invoking {@code computeValue} and installing the resulting value.
+     * <p>
+     * When {@code T} attempts to install the newly computed value,
+     * if the state is still at {@code 2N}, the class value will be initialized
+     * with the computed value, advancing it to state {@code 2N+1}.
+     * <p>
+     * Otherwise, whether the new state is even or odd,
+     * {@code T} will discard the newly computed value
+     * and retry the {@code get} operation.
+     * <p>
+     * Discarding and retrying is an important proviso,
+     * since otherwise {@code T} could potentially install
+     * a disastrously stale value.  For example:
+     * <ul>
+     * <li>{@code T} calls {@code CV.get(C)} and sees state {@code 2N}
+     * <li>{@code T} quickly computes a time-dependent value {@code V0} and gets ready to install it
+     * <li>{@code T} is hit by an unlucky paging or scheduling event, and goes to sleep for a long time
+     * <li>...meanwhile, {@code T2} also calls {@code CV.get(C)} and sees state {@code 2N}
+     * <li>{@code T2} quickly computes a similar time-dependent value {@code V1} and installs it on {@code CV.get(C)}
+     * <li>{@code T2} (or a third thread) then calls {@code CV.remove(C)}, undoing {@code T2}'s work
+     * <li> the previous actions of {@code T2} are repeated several times
+     * <li> also, the relevant computed values change over time: {@code V1}, {@code V2}, ...
+     * <li>...meanwhile, {@code T} wakes up and attempts to install {@code V0}; <em>this must fail</em>
+     * </ul>
+     * We can assume in the above scenario that {@code CV.computeValue} uses locks to properly
+     * observe the time-dependent states as it computes {@code V1}, etc.
+     * This does not remove the threat of a stale value, since there is a window of time
+     * between the return of {@code computeValue} in {@code T} and the installation
+     * of the new value.  No user synchronization is possible during this time.
+     *
+     * @param type the type whose class value must be removed
+     * @throws NullPointerException if the argument is null
+     */
+    public void remove(Class<?> type) {
+        ClassValueMap map = getMap(type);
+        map.removeEntry(this);
+    }
+
+    // Possible functionality for JSR 292 MR 1
+    /*public*/ void put(Class<?> type, T value) {
+        ClassValueMap map = getMap(type);
+        map.changeEntry(this, value);
+    }
+
+    /// --------
+    /// Implementation...
+    /// --------
+
+    /**
+     * Return the cache, if it exists, else a dummy empty cache.
+     */
+    private static Entry<?>[] getCacheCarefully(Class<?> type) {
+        // racing type.classValueMap{.cacheArray} : null => new Entry[X] <=> new Entry[Y]
+        ClassValueMap map = MAP_CACHE.get(type);
+        if (map == null) return EMPTY_CACHE;
+        Entry<?>[] cache = map.getCache();
+        return cache;
+        // invariant:  returned value is safe to dereference and check for an Entry
+    }
+
+    /**
+     * Initial, one-element, empty cache used by all Class instances.  Must never be filled.
+     */
+    private static final Entry<?>[] EMPTY_CACHE = {null};
+
     /**
      * Slow tail of ClassValue.get to retry at nearby locations in the cache,
      * or take a slow lock and check the hash table.
@@ -87,16 +216,6 @@ public abstract class ClassValue<T> {
         if (e != null)
             return e.value();
         return getFromHashMap(type);
-    }
-
-    /** Return the cache, if it exists, else a dummy empty cache. */
-    private static Entry<?>[] getCacheCarefully(Class<?> type) {
-        // racing type.classValueMap{.cacheArray} : null => new Entry[X] <=> new Entry[Y]
-        ClassValueMap map = null;
-        if (map == null)  return EMPTY_CACHE;
-        Entry<?>[] cache = map.getCache();
-        return cache;
-        // invariant:  returned value is safe to dereference and check for an Entry
     }
 
     // Hack to suppress warnings on the (T) cast, which is a no-op.
@@ -134,19 +253,25 @@ public abstract class ClassValue<T> {
         // invariant:  No false positives on version match.  Null is OK for false negative.
         // invariant:  If version matches, then e.value is readable (final set in Entry.<init>)
     }
+
     /** Internal hash code for accessing Class.classValueMap.cacheArray. */
     final int hashCodeForCache = nextHashCode.getAndAdd(HASH_INCREMENT) & HASH_MASK;
+
     /** Value stream for hashCodeForCache.  See similar structure in ThreadLocal. */
     private static final AtomicInteger nextHashCode = new AtomicInteger();
+
     /** Good for power-of-two tables.  See similar structure in ThreadLocal. */
     private static final int HASH_INCREMENT = 0x61c88647;
+
     /** Mask a hash code to be positive but not too large, to prevent wraparound. */
     static final int HASH_MASK = (-1 >>> 2);
+
     /**
      * Private key for retrieval of this object from ClassValueMap.
      */
     static class Identity {
     }
+
     /**
      * This ClassValue's identity, expressed as an opaque object.
      * The main object {@code ClassValue.this} is incorrect since
@@ -155,42 +280,6 @@ public abstract class ClassValue<T> {
      */
     final Identity identity = new Identity();
 
-    /** Return the backing map associated with this type. */
-    private static ClassValueMap getMap(Class<?> type) {
-        // racing type.classValueMap : null (blank) => unique ClassValueMap
-        // if a null is observed, a map is created (lazily, synchronously, uniquely)
-        // all further access to that map is synchronized
-        ClassValueMap map = MAP_CACHE.get(type);
-        if (map != null)  return map;
-        return initializeMap(type);
-    }
-
-    private static final Object CRITICAL_SECTION = new Object();
-    private static ClassValueMap initializeMap(Class<?> type) {
-        ClassValueMap map;
-        synchronized (CRITICAL_SECTION) {  // private object to avoid deadlocks
-            // happens about once per type
-            if ((map = MAP_CACHE.get(type)) == null)
-                map = new ClassValueMap(type);
-                MAP_CACHE.put(type, map);
-        }
-        return map;
-    }
-
-    static <T> Entry<T> makeEntry(Version<T> explicitVersion, T value) {
-        // Note that explicitVersion might be different from this.version.
-        return new Entry<>(explicitVersion, value);
-        // As soon as the Entry is put into the cache, the value will be
-        // reachable via a data race (as defined by the Java Memory Model).
-        // This race is benign, assuming the value object itself can be
-        // read safely by multiple threads.  This is up to the user.
-        //
-        // The entry and version fields themselves can be safely read via
-        // a race because they are either final or have controlled states.
-        // If the pointer from the entry to the version is still null,
-        // or if the version goes immediately dead and is nulled out,
-        // the reader will take the slow path and retry under a lock.
-    }
     /**
      * Current version for retrieving this class value from the cache.
      * Any number of computeValue calls can be cached in association with one version.
@@ -207,7 +296,7 @@ public abstract class ClassValue<T> {
      * will receive the notification without delay.
      * <p>
      * If version were not volatile, one thread T1 could persistently hold onto
-     * a stale value this.value == V1, while while another thread T2 advances
+     * a stale value this.value == V1, while another thread T2 advances
      * (under a lock) to this.value == V2.  This will typically be harmless,
      * but if T1 and T2 interact causally via some other channel, such that
      * T1's further actions are constrained (in the JMM) to happen after
@@ -219,14 +308,21 @@ public abstract class ClassValue<T> {
      * before this.version.
      */
     private volatile Version<T> version = new Version<>(this);
+
     Version<T> version() { return version; }
+
     void bumpVersion() { version = new Version<>(this); }
+
     static class Version<T> {
         private final ClassValue<T> classValue;
         private final Entry<T> promise = new Entry<>(this);
+
         Version(ClassValue<T> classValue) { this.classValue = classValue; }
+
         ClassValue<T> classValue() { return classValue; }
+
         Entry<T> promise() { return promise; }
+
         boolean isLive() { return classValue.version() == this; }
     }
 
@@ -243,25 +339,33 @@ public abstract class ClassValue<T> {
      */
     static class Entry<T> extends WeakReference<Version<T>> {
         final Object value;  // usually of type T, but sometimes (Entry)this
+
         Entry(Version<T> version, T value) {
             super(version);
             this.value = value;  // for a regular entry, value is of type T
         }
+
         private void assertNotPromise() { assert(!isPromise()); }
+
         /** For creating a promise. */
         Entry(Version<T> version) {
             super(version);
             this.value = this;  // for a promise, value is not of type T, but Entry!
         }
+
         /** Fetch the value.  This entry must not be a promise. */
         @SuppressWarnings("unchecked")  // if !isPromise, type is T
         T value() { assertNotPromise(); return (T) value; }
+
         boolean isPromise() { return value == this; }
+
         Version<T> version() { return get(); }
+
         ClassValue<T> classValueOrNull() {
             Version<T> v = version();
             return (v == null) ? null : v.classValue();
         }
+
         boolean isLive() {
             Version<T> v = version();
             if (v == null)  return false;
@@ -269,6 +373,7 @@ public abstract class ClassValue<T> {
             clear();
             return false;
         }
+
         Entry<T> refreshVersion(Version<T> v2) {
             assertNotPromise();
             @SuppressWarnings("unchecked")  // if !isPromise, type is T
@@ -277,36 +382,83 @@ public abstract class ClassValue<T> {
             // value = null -- caller must drop
             return e2;
         }
+
         static final Entry<?> DEAD_ENTRY = new Entry<>(null, null);
     }
 
-    /** A backing map for all ClassValues, relative a single given type.
-     *  Gives a fully serialized "true state" for each pair (ClassValue cv, Class type).
-     *  Also manages an unserialized fast-path cache.
+    /**
+     * Return the backing map associated with this type.
      */
-    static class ClassValueMap extends WeakHashMap<ClassValue.Identity, ClassValue.Entry<?>> {
-        private final Class<?> type;
-        private ClassValue.Entry<?>[] cacheArray;
+    private static ClassValueMap getMap(Class<?> type) {
+        // racing type.classValueMap : null (blank) => unique ClassValueMap
+        // if a null is observed, a map is created (lazily, synchronously, uniquely)
+        // all further access to that map is synchronized
+        ClassValueMap map = MAP_CACHE.get(type);
+        if (map != null) return map;
+        return initializeMap(type);
+    }
+
+    private static final Object CRITICAL_SECTION = new Object();
+
+    private static ClassValueMap initializeMap(Class<?> type) {
+        ClassValueMap map;
+        synchronized (CRITICAL_SECTION) {  // private object to avoid deadlocks
+            // happens about once per type
+            if ((map = MAP_CACHE.get(type)) == null)
+                map = new ClassValueMap();
+            MAP_CACHE.put(type, map);
+        }
+        return map;
+    }
+
+    static <T> Entry<T> makeEntry(Version<T> explicitVersion, T value) {
+        // Note that explicitVersion might be different from this.version.
+        return new Entry<>(explicitVersion, value);
+
+        // As soon as the Entry is put into the cache, the value will be
+        // reachable via a data race (as defined by the Java Memory Model).
+        // This race is benign, assuming the value object itself can be
+        // read safely by multiple threads.  This is up to the user.
+        //
+        // The entry and version fields themselves can be safely read via
+        // a race because they are either final or have controlled states.
+        // If the pointer from the entry to the version is still null,
+        // or if the version goes immediately dead and is nulled out,
+        // the reader will take the slow path and retry under a lock.
+    }
+
+    // The following class could also be top level and non-public:
+
+    /**
+     * A backing map for all ClassValues.
+     * Gives a fully serialized "true state" for each pair (ClassValue cv, Class type).
+     * Also manages an unserialized fast-path cache.
+     */
+    static class ClassValueMap extends WeakHashMap<ClassValue.Identity, Entry<?>> {
+        private Entry<?>[] cacheArray;
         private int cacheLoad, cacheLoadLimit;
+
         /** Number of entries initially allocated to each type when first used with any ClassValue.
          *  It would be pointless to make this much smaller than the Class and ClassValueMap objects themselves.
          *  Must be a power of 2.
          */
         private static final int INITIAL_ENTRIES = 32;
-        /** Build a backing map for ClassValues, relative the given type.
+
+        /** Build a backing map for ClassValues.
          *  Also, create an empty cache array and install it on the class.
          */
-        ClassValueMap(Class<?> type) {
-            this.type = type;
+        ClassValueMap() {
             sizeCache(INITIAL_ENTRIES);
         }
 
-        ClassValue.Entry<?>[] getCache() { return cacheArray; }
+        Entry<?>[] getCache() {
+            return cacheArray;
+        }
+
         /** Initiate a query.  Store a promise (placeholder) if there is no value yet. */
-        synchronized
-        <T> ClassValue.Entry<T> startEntry(ClassValue<T> classValue) {
+        synchronized <T> Entry<T> startEntry(ClassValue<T> classValue) {
             @SuppressWarnings("unchecked")  // one map has entries for all value types <T>
-            ClassValue.Entry<T> e = (ClassValue.Entry<T>) get(classValue.identity);
+            Entry<T> e = (Entry<T>) get(classValue.identity);
             Version<T> v = classValue.version();
             if (e == null) {
                 e = v.promise();
@@ -338,14 +490,15 @@ public abstract class ClassValue<T> {
             }
         }
 
-        /** Finish a query.  Overwrite a matching placeholder.  Drop stale incoming values. */
-        synchronized
-        <T> ClassValue.Entry<T> finishEntry(ClassValue<T> classValue, ClassValue.Entry<T> e) {
+        /**
+         * Finish a query.  Overwrite a matching placeholder.  Drop stale incoming values.
+         */
+        synchronized <T> Entry<T> finishEntry(ClassValue<T> classValue, Entry<T> e) {
             @SuppressWarnings("unchecked")  // one map has entries for all value types <T>
-            ClassValue.Entry<T> e0 = (ClassValue.Entry<T>) get(classValue.identity);
+            Entry<T> e0 = (Entry<T>) get(classValue.identity);
             if (e == e0) {
                 // We can get here during exception processing, unwinding from computeValue.
-                assert(e.isPromise());
+                assert (e.isPromise());
                 remove(classValue.identity);
                 return null;
             } else if (e0 != null && e0.isPromise() && e0.version() == e.version()) {
@@ -366,20 +519,27 @@ public abstract class ClassValue<T> {
         }
 
         /** Remove an entry. */
-        synchronized
-        void removeEntry(ClassValue<?> classValue) {
-            // make all cache elements for this guy go stale:
-            if (remove(classValue.identity) != null) {
+        synchronized void removeEntry(ClassValue<?> classValue) {
+            Entry<?> e = remove(classValue.identity);
+            if (e == null) {
+                // Uninitialized, and no pending calls to computeValue.  No change.
+            } else if (e.isPromise()) {
+                // State is uninitialized, with a pending call to finishEntry.
+                // Since remove is a no-op in such a state, keep the promise
+                // by putting it back into the map.
+                put(classValue.identity, e);
+            } else {
+                // In an initialized state.  Bump forward, and de-initialize.
                 classValue.bumpVersion();
+                // Make all cache elements for this guy go stale.
                 removeStaleEntries(classValue);
             }
         }
 
         /** Change the value for an entry. */
-        synchronized
-        <T> void changeEntry(ClassValue<T> classValue, T value) {
+        synchronized <T> void changeEntry(ClassValue<T> classValue, T value) {
             @SuppressWarnings("unchecked")  // one map has entries for all value types <T>
-            ClassValue.Entry<T> e0 = (ClassValue.Entry<T>) get(classValue.identity);
+            Entry<T> e0 = (Entry<T>) get(classValue.identity);
             Version<T> version = classValue.version();
             if (e0 != null) {
                 if (e0.version() == version && e0.value() == value)
@@ -388,7 +548,7 @@ public abstract class ClassValue<T> {
                 classValue.bumpVersion();
                 removeStaleEntries(classValue);
             }
-            ClassValue.Entry<T> e = makeEntry(version, value);
+            Entry<T> e = makeEntry(version, value);
             put(classValue.identity, e);
             // Add to the cache, to enable the fast path, next time.
             checkCacheLoad();
@@ -398,34 +558,42 @@ public abstract class ClassValue<T> {
         /// --------
         /// Cache management.
         /// --------
+
         // Statics do not need synchronization.
-        /** Load the cache entry at the given (hashed) location. */
-        static ClassValue.Entry<?> loadFromCache(ClassValue.Entry<?>[] cache, int i) {
+
+        /**
+         * Load the cache entry at the given (hashed) location.
+         */
+        static Entry<?> loadFromCache(Entry<?>[] cache, int i) {
             // non-racing cache.length : constant
             // racing cache[i & (mask)] : null <=> Entry
-            return cache[i & (cache.length-1)];
+            return cache[i & (cache.length - 1)];
             // invariant:  returned value is null or well-constructed (ready to match)
         }
 
-        /** Look in the cache, at the home location for the given ClassValue. */
-        static <T> ClassValue.Entry<T> probeHomeLocation(ClassValue.Entry<?>[] cache, ClassValue<T> classValue) {
+        /**
+         * Look in the cache, at the home location for the given ClassValue.
+         */
+        static <T> Entry<T> probeHomeLocation(Entry<?>[] cache, ClassValue<T> classValue) {
             return classValue.castEntry(loadFromCache(cache, classValue.hashCodeForCache));
         }
 
-        /** Given that first probe was a collision, retry at nearby locations. */
-        static <T> ClassValue.Entry<T> probeBackupLocations(ClassValue.Entry<?>[] cache, ClassValue<T> classValue) {
-            if (PROBE_LIMIT <= 0)  return null;
+        /**
+         * Given that first probe was a collision, retry at nearby locations.
+         */
+        static <T> Entry<T> probeBackupLocations(Entry<?>[] cache, ClassValue<T> classValue) {
+            if (PROBE_LIMIT <= 0) return null;
             // Probe the cache carefully, in a range of slots.
-            int mask = (cache.length-1);
+            int mask = (cache.length - 1);
             int home = (classValue.hashCodeForCache & mask);
-            ClassValue.Entry<?> e2 = cache[home];  // victim, if we find the real guy
+            Entry<?> e2 = cache[home];  // victim, if we find the real guy
             if (e2 == null) {
                 return null;   // if nobody is at home, no need to search nearby
             }
             // assume !classValue.match(e2), but do not assert, because of races
             int pos2 = -1;
             for (int i = home + 1; i < home + PROBE_LIMIT; i++) {
-                ClassValue.Entry<?> e = cache[i & mask];
+                Entry<?> e = cache[i & mask];
                 if (e == null) {
                     break;   // only search within non-null runs
                 }
@@ -433,25 +601,27 @@ public abstract class ClassValue<T> {
                     // relocate colliding entry e2 (from cache[home]) to first empty slot
                     cache[home] = e;
                     if (pos2 >= 0) {
-                        cache[i & mask] = ClassValue.Entry.DEAD_ENTRY;
+                        cache[i & mask] = Entry.DEAD_ENTRY;
                     } else {
                         pos2 = i;
                     }
                     cache[pos2 & mask] = ((entryDislocation(cache, pos2, e2) < PROBE_LIMIT)
                             ? e2                  // put e2 here if it fits
-                            : ClassValue.Entry.DEAD_ENTRY);
+                            : Entry.DEAD_ENTRY);
                     return classValue.castEntry(e);
                 }
                 // Remember first empty slot, if any:
-                if (!e.isLive() && pos2 < 0)  pos2 = i;
+                if (!e.isLive() && pos2 < 0) pos2 = i;
             }
             return null;
         }
 
-        /** How far out of place is e? */
-        private static int entryDislocation(ClassValue.Entry<?>[] cache, int pos, ClassValue.Entry<?> e) {
+        /**
+         * How far out of place is e?
+         */
+        private static int entryDislocation(Entry<?>[] cache, int pos, Entry<?> e) {
             ClassValue<?> cv = e.classValueOrNull();
-            if (cv == null)  return 0;  // entry is not live!
+            if (cv == null) return 0;  // entry is not live!
             int mask = (cache.length-1);
             return (pos - cv.hashCodeForCache) & mask;
         }
@@ -459,11 +629,12 @@ public abstract class ClassValue<T> {
         /// --------
         /// Below this line all functions are private, and assume synchronized access.
         /// --------
+
         private void sizeCache(int length) {
-            assert((length & (length-1)) == 0);  // must be power of 2
+            assert ((length & (length - 1)) == 0);  // must be power of 2
             cacheLoad = 0;
             cacheLoadLimit = (int) ((double) length * CACHE_LOAD_LIMIT / 100);
-            cacheArray = new ClassValue.Entry<?>[length];
+            cacheArray = new Entry<?>[length];
         }
 
         /** Make sure the cache load stays below its limit, if possible. */
@@ -477,52 +648,54 @@ public abstract class ClassValue<T> {
             removeStaleEntries();
             if (cacheLoad < cacheLoadLimit)
                 return;  // win
-            ClassValue.Entry<?>[] oldCache = getCache();
+            Entry<?>[] oldCache = getCache();
             if (oldCache.length > HASH_MASK)
                 return;  // lose
             sizeCache(oldCache.length * 2);
-            for (ClassValue.Entry<?> e : oldCache) {
+            for (Entry<?> e : oldCache) {
                 if (e != null && e.isLive()) {
                     addToCache(e);
                 }
             }
         }
 
-        /** Remove stale entries in the given range.
-         *  Should be executed under a Map lock.
+        /**
+         * Remove stale entries in the given range.
+         * Should be executed under a Map lock.
          */
-        private void removeStaleEntries(ClassValue.Entry<?>[] cache, int begin, int count) {
-            if (PROBE_LIMIT <= 0)  return;
-            int mask = (cache.length-1);
+        private void removeStaleEntries(Entry<?>[] cache, int begin, int count) {
+            if (PROBE_LIMIT <= 0) return;
+            int mask = (cache.length - 1);
             int removed = 0;
             for (int i = begin; i < begin + count; i++) {
-                ClassValue.Entry<?> e = cache[i & mask];
+                Entry<?> e = cache[i & mask];
                 if (e == null || e.isLive())
                     continue;  // skip null and live entries
-                ClassValue.Entry<?> replacement = null;
+                Entry<?> replacement = null;
                 if (PROBE_LIMIT > 1) {
                     // avoid breaking up a non-null run
                     replacement = findReplacement(cache, i);
                 }
                 cache[i & mask] = replacement;
-                if (replacement == null)  removed += 1;
+                if (replacement == null) removed += 1;
             }
             cacheLoad = Math.max(0, cacheLoad - removed);
         }
 
-        /** Clearing a cache slot risks disconnecting following entries
-         *  from the head of a non-null run, which would allow them
-         *  to be found via reprobes.  Find an entry after cache[begin]
-         *  to plug into the hole, or return null if none is needed.
+        /**
+         * Clearing a cache slot risks disconnecting following entries
+         * from the head of a non-null run, which would allow them
+         * to be found via reprobes.  Find an entry after cache[begin]
+         * to plug into the hole, or return null if none is needed.
          */
-        private ClassValue.Entry<?> findReplacement(ClassValue.Entry<?>[] cache, int home1) {
-            ClassValue.Entry<?> replacement = null;
+        private Entry<?> findReplacement(Entry<?>[] cache, int home1) {
+            Entry<?> replacement = null;
             int haveReplacement = -1, replacementPos = 0;
-            int mask = (cache.length-1);
+            int mask = (cache.length - 1);
             for (int i2 = home1 + 1; i2 < home1 + PROBE_LIMIT; i2++) {
-                ClassValue.Entry<?> e2 = cache[i2 & mask];
-                if (e2 == null)  break;  // End of non-null run.
-                if (!e2.isLive())  continue;  // Doomed anyway.
+                Entry<?> e2 = cache[i2 & mask];
+                if (e2 == null) break;  // End of non-null run.
+                if (!e2.isLive()) continue;  // Doomed anyway.
                 int dis2 = entryDislocation(cache, i2, e2);
                 if (dis2 == 0)  continue;  // e2 already optimally placed
                 int home2 = i2 - dis2;
@@ -542,9 +715,9 @@ public abstract class ClassValue<T> {
                 }
             }
             if (haveReplacement >= 0) {
-                if (cache[(replacementPos+1) & mask] != null) {
+                if (cache[(replacementPos + 1) & mask] != null) {
                     // Be conservative, to avoid breaking up a non-null run.
-                    cache[replacementPos & mask] = (ClassValue.Entry<?>) ClassValue.Entry.DEAD_ENTRY;
+                    cache[replacementPos & mask] = (Entry<?>) Entry.DEAD_ENTRY;
                 } else {
                     cache[replacementPos & mask] = null;
                     cacheLoad -= 1;
@@ -560,25 +733,30 @@ public abstract class ClassValue<T> {
 
         /** Remove all stale entries, everywhere. */
         private void removeStaleEntries() {
-            ClassValue.Entry[] cache = getCache();
+            Entry<?>[] cache = getCache();
             removeStaleEntries(cache, 0, cache.length + PROBE_LIMIT - 1);
         }
 
-        /** Add the given entry to the cache, in its home location, unless it is out of date. */
-        private <T> void addToCache(ClassValue.Entry<T> e) {
+        /**
+         * Add the given entry to the cache, in its home location, unless it is out of date.
+         */
+        private <T> void addToCache(Entry<T> e) {
             ClassValue<T> classValue = e.classValueOrNull();
             if (classValue != null)
                 addToCache(classValue, e);
         }
-        /** Add the given entry to the cache, in its home location. */
-        private <T> void addToCache(ClassValue<T> classValue, ClassValue.Entry<T> e) {
-            if (PROBE_LIMIT <= 0)  return;  // do not fill cache
+
+        /**
+         * Add the given entry to the cache, in its home location.
+         */
+        private <T> void addToCache(ClassValue<T> classValue, Entry<T> e) {
+            if (PROBE_LIMIT <= 0) return;  // do not fill cache
             // Add e to the cache.
-            ClassValue.Entry<?>[] cache = getCache();
-            int mask = (cache.length-1);
+            Entry<?>[] cache = getCache();
+            int mask = (cache.length - 1);
             int home = classValue.hashCodeForCache & mask;
-            ClassValue.Entry<?> e2 = placeInCache(cache, home, e, false);
-            if (e2 == null)  return;  // done
+            Entry<?> e2 = placeInCache(cache, home, e, false);
+            if (e2 == null) return;  // done
             if (PROBE_LIMIT > 1) {
                 // try to move e2 somewhere else in his probe range
                 int dis2 = entryDislocation(cache, home, e2);
@@ -591,11 +769,13 @@ public abstract class ClassValue<T> {
             }
             // Note:  At this point, e2 is just dropped from the cache.
         }
-        /** Store the given entry.  Update cacheLoad, and return any live victim.
-         *  'Gently' means return self rather than dislocating a live victim.
+
+        /**
+         * Store the given entry.  Update cacheLoad, and return any live victim.
+         * 'Gently' means return self rather than dislocating a live victim.
          */
-        private ClassValue.Entry<?> placeInCache(ClassValue.Entry<?>[] cache, int pos, ClassValue.Entry<?> e, boolean gently) {
-            ClassValue.Entry<?> e2 = overwrittenEntry(cache[pos]);
+        private Entry<?> placeInCache(Entry<?>[] cache, int pos, Entry<?> e, boolean gently) {
+            Entry<?> e2 = overwrittenEntry(cache[pos]);
             if (gently && e2 != null) {
                 // do not overwrite a live entry
                 return e;
@@ -604,17 +784,19 @@ public abstract class ClassValue<T> {
                 return e2;
             }
         }
+
         /** Note an entry that is about to be overwritten.
          *  If it is not live, quietly replace it by null.
          *  If it is an actual null, increment cacheLoad,
          *  because the caller is going to store something
          *  in its place.
          */
-        private <T> ClassValue.Entry<T> overwrittenEntry(ClassValue.Entry<T> e2) {
+        private <T> Entry<T> overwrittenEntry(Entry<T> e2) {
             if (e2 == null)  cacheLoad += 1;
             else if (e2.isLive())  return e2;
             return null;
         }
+
         /** Percent loading of cache before resize. */
         private static final int CACHE_LOAD_LIMIT = 67;  // 0..100
         /** Maximum number of probes to attempt. */

@@ -22,6 +22,10 @@ open class GrooidClassLoader(loader: ClassLoader, config: CompilerConfiguration?
                     super.onClassNode(classWriter, classNode)
                 }.getOrNull()
             }
+
+            override fun createClass(code: ByteArray?, classNode: ClassNode?): Class<*> {
+                return super.createClass(code, classNode)
+            }
         }
     }
 }
