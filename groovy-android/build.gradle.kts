@@ -12,7 +12,7 @@ plugins {
 extra.apply {
     set("PUBLISH_GROUP_ID", "io.github.dingyi222666")
     set("PUBLISH_ARTIFACT_ID", "groovy-android")
-    set("PUBLISH_VERSION", "1.0.6")
+    set("PUBLISH_VERSION", "1.0.7-beta1")
     extra["signing.keyId"] = ""
     extra["signing.password"] = ""
     extra["signing.secretKeyRingFile"] = ""

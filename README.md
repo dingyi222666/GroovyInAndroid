@@ -1,11 +1,11 @@
 # GroovyInAndroid
 
-Run Groovy on Android, compile groovy code to dex using D8 and run it in Android.
+Run Groovy in Android, compile groovy code to dex using D8 and run it in Android.
 
 ## Quick Start
 
 ```groovy
-implementation "io.github.dingyi222666:groovy-android:1.0.6"
+implementation "io.github.dingyi222666:groovy-android:1.0.7-beta1"
 ```
 
 ### ~~Using ScriptFactory~~
@@ -39,4 +39,5 @@ scriptClass.newInstance().run()
 
 
 ### TODO
- - [ ] Support caching dex
+ - [x] Support caching dex 
+    - [x] always compile the dex into memory, we don't need to be concerned about repeatedly compiling the dex causing much cache dex

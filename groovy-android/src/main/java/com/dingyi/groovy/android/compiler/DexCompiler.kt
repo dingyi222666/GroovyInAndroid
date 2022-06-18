@@ -45,6 +45,61 @@ object DexCompiler {
         return outputFile
     }
 
+    fun compileClassFile(classFiles: List<File>): File {
+        val outputFile = File(
+            AppDataDirGuesser().guess(),
+            "Generated_${UUID.randomUUID()}.jar"
+        )
+
+        val dexBuilder = D8Command.builder(DexDiagnosticsHandler())
+            .apply {
+                disableDesugaring = true
+                minApiLevel = 26
+                setOutput(
+                    outputFile.toPath(), OutputMode.DexIndexed
+                )
+            }
+
+
+        classFiles.forEach {
+            dexBuilder.addProgramFiles(it.toPath())
+        }
+
+        D8.run(dexBuilder.build())
+
+
+        return outputFile
+    }
+
+    fun compileClassFileToDexByteCode(classFiles: List<File>): List<ByteArray> {
+        val result = mutableListOf<ByteArray>()
+        val dexBuilder = D8Command.builder(DexDiagnosticsHandler())
+            .apply {
+                disableDesugaring = true
+                minApiLevel = 26
+            }
+
+        classFiles.forEach {
+            dexBuilder.addProgramFiles(it.toPath())
+        }
+        dexBuilder.programConsumer = object : DexIndexedConsumer {
+            override fun finished(p0: DiagnosticsHandler) {}
+            override fun accept(
+                fileIndex: Int,
+                data: ByteDataView,
+                descriptors: MutableSet<String>?,
+                handler: DiagnosticsHandler?
+            ) {
+                result.add(data.copyByteData())
+            }
+        }
+
+        D8.run(dexBuilder.build())
+
+        return result
+
+    }
+
     fun compileClassByteCodeToDexByteCode(classBytes: List<ByteArray>): List<ByteArray> {
         val result = mutableListOf<ByteArray>()
         val dexBuilder = D8Command.builder(DexDiagnosticsHandler())
@@ -147,6 +202,63 @@ object DexCompiler {
             )
         }
     }
+
+    fun compileAndLoadClassFiles(
+        classBytes: List<File>,
+        classLoader: ClassLoader,
+        type: CompileType
+    ): ClassLoader {
+        return when (type) {
+            CompileType.COMPILE_TO_FILE -> {
+                val dexFile = compileClassFile(classBytes)
+                loadDexFile(dexFile, classLoader)
+            }
+            CompileType.COMPILE_TO_MEMORY -> {
+                val dexBytes = compileClassFileToDexByteCode(classBytes)
+                loadDexInMemory(dexBytes, classLoader)
+            }
+        }
+    }
+
+    fun compileAndLoadClassFile(classFiles: List<File>): ClassLoader {
+        return runCatching {
+            compileAndLoadClassFiles(
+                classFiles,
+                this.javaClass.classLoader,
+                CompileType.COMPILE_TO_MEMORY
+            )
+        }.getOrElse {
+            compileAndLoadClassFiles(
+                classFiles,
+                this.javaClass.classLoader,
+                CompileType.COMPILE_TO_FILE
+            )
+        }
+    }
+
+    fun compileAndLoadClassFiles(
+        classFiles: List<File>,
+        classLoader: ClassLoader
+    ): ClassLoader {
+        return runCatching {
+            val classLoader = compileAndLoadClassFiles(
+                classFiles,
+                classLoader,
+                CompileType.COMPILE_TO_MEMORY
+            )
+            Log.d("DexCompiler", "compileAndLoadClassFile: compile to memory")
+            classLoader
+        }.getOrElse {
+            Log.e("DexCompiler", "compileAndLoadClassFile error, and compile to file", it)
+            it.printStackTrace()
+            compileAndLoadClassFiles(
+                classFiles,
+                classLoader,
+                CompileType.COMPILE_TO_FILE
+            )
+        }
+    }
+
 
     fun loadDexFile(dexFile: File): ClassLoader {
         return loadDexFile(dexFile, this.javaClass.classLoader)
