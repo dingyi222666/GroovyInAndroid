@@ -25,9 +25,11 @@ import java.util.ArrayList
 /**
  * Uses heuristics to guess the application's private data directory.
  */
-internal class AppDataDirGuesser {
+class AppDataDirGuesser {
+
+
     fun guess(): File {
-        return runCatching {
+        return guessDir ?: runCatching {
             val classLoader = guessSuitableClassLoader()
             // Check that we have an instance of the PathClassLoader.
             val clazz = Class.forName("dalvik.system.PathClassLoader")
@@ -147,6 +149,9 @@ internal class AppDataDirGuesser {
     }
 
     companion object {
+
+        var guessDir: File? = null
+
         // Copied from UserHandle, indicates range of uids allocated for a user.
         const val PER_USER_RANGE = 100000
 

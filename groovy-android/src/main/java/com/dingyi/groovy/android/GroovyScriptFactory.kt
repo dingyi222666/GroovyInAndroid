@@ -9,6 +9,8 @@ import groovy.lang.Script
 import org.codehaus.groovy.control.CompilerConfiguration
 import java.io.File
 
+
+@Deprecated("Use DynamicGrooidClassLoader instead")
 class GroovyScriptFactory(
     private val compileDir: File = AppDataDirGuesser().guess(),
 ) {

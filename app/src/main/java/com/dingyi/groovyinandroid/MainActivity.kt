@@ -3,12 +3,10 @@ package com.dingyi.groovyinandroid
 import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
 import android.view.View
-import com.dingyi.groovyinandroid.R
 import com.dingyi.groovy.android.GroovyScriptFactory
-import groovy.lang.DynamicGrooidDexClassLoader
+import dalvik.system.InMemoryDexClassLoader
+import groovy.lang.DynamicGrooidClassLoader
 import groovy.lang.Script
-import org.codehaus.groovy.control.CompilerConfiguration
-import java.io.File
 
 class MainActivity : AppCompatActivity(), View.OnClickListener {
 
@@ -27,7 +25,6 @@ class MainActivity : AppCompatActivity(), View.OnClickListener {
 
         findViewById<View>(R.id.test).setOnClickListener(this)
 
-
         scriptFactory = GroovyScriptFactory()
 
     }
@@ -38,10 +35,16 @@ class MainActivity : AppCompatActivity(), View.OnClickListener {
                   groovyCode.trimIndent()
               )*/
 
-        val classLoader = DynamicGrooidDexClassLoader(this.classLoader)
+
+        val classLoader = DynamicGrooidClassLoader(this.classLoader)
 
         val scriptClass =
-            classLoader.parseClass(groovyCode) as Class<Script>
+            kotlin.runCatching {  classLoader.parseClass(groovyCode) as Class<Script> }
+                .onFailure {
+                    //do something in parseClass failure
+                    it.printStackTrace()
+                }
+                .getOrNull() ?: error("parseClass failure")
         scriptClass.newInstance().run()
     }
 

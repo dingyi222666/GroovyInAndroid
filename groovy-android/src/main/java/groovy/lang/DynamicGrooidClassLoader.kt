@@ -6,6 +6,7 @@ import com.android.tools.r8.OutputMode
 import com.android.tools.r8.origin.Origin
 import com.dingyi.groovy.android.AppDataDirGuesser
 import com.dingyi.groovy.android.DexClassLoader
+import com.dingyi.groovy.android.compiler.DexCompiler
 import groovyjarjarasm.asm.ClassWriter
 import org.codehaus.groovy.ast.ClassNode
 import org.codehaus.groovy.control.CompilationUnit
@@ -15,14 +16,13 @@ import java.io.File
 import java.lang.reflect.Field
 import java.net.URL
 import java.security.AccessController
-import java.security.CodeSource
 import java.security.PrivilegedAction
 import java.util.*
 
 /**
  * Dynamic load to the memory,only support api 26+
  * */
-open class DynamicGrooidDexClassLoader(
+open class DynamicGrooidClassLoader(
     loader: ClassLoader,
     config: CompilerConfiguration? = null,
     useConfigurationClasspath: Boolean = false,
@@ -30,6 +30,8 @@ open class DynamicGrooidDexClassLoader(
     GroovyClassLoader(loader, config, false) {
 
     constructor(loader: ClassLoader, config: CompilerConfiguration?) : this(loader, config, false)
+
+    private val classBytes = mutableListOf<ByteArray>()
 
     private val findResourceMethod = ClassLoader::class.java
         .getDeclaredMethod("findResource", String::class.java)
@@ -43,7 +45,7 @@ open class DynamicGrooidDexClassLoader(
 
     override fun createCollector(unit: CompilationUnit, su: SourceUnit): ClassCollector {
         val loader = AccessController.doPrivileged(
-            PrivilegedAction { InnerLoader(this@DynamicGrooidDexClassLoader) })
+            PrivilegedAction { InnerLoader(this@DynamicGrooidClassLoader) })
         return object : ClassCollector(loader, unit, su) {
 
 
@@ -67,7 +69,7 @@ open class DynamicGrooidDexClassLoader(
                     code
                 }
 
-                val theClass = this@DynamicGrooidDexClassLoader.defineClass(
+                val theClass = this@DynamicGrooidClassLoader.defineClass(
                     classNode
                         .name, fcode
                 )
@@ -91,26 +93,8 @@ open class DynamicGrooidDexClassLoader(
     }
 
     private fun transformClassFileToDexClassLoader(byteArray: ByteArray): ClassLoader {
-
-
-        val dexBuilder = D8Command.builder()
-            .apply {
-                disableDesugaring = true
-                minApiLevel = 26
-                setOutput(
-                    File(
-                        AppDataDirGuesser().guess(),
-                        "Generated_${UUID.randomUUID()}.jar"
-                    ).toPath(), OutputMode.DexIndexed
-                )
-            }
-
-
-        dexBuilder.addClassProgramData(byteArray, Origin.unknown())
-
-        D8.run(dexBuilder.build())
-
-        return DexClassLoader(dexBuilder.outputPath.toFile().absolutePath, null, null, this.javaClass.classLoader)
+        if (classBytes.isEmpty()) classBytes.add(byteArray) else classBytes[0] = byteArray
+        return DexCompiler.compileAndLoadClassByteCode(classBytes, this)
     }
 
     override fun findClass(name: String): Class<*>? {
