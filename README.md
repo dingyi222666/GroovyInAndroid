@@ -2,6 +2,7 @@
 
 Run Groovy in Android, compile groovy code to dex using D8 and run it in Android.
 
+
 ## Quick Start
 
 ```groovy
@@ -25,7 +26,7 @@ scriptFactory
 ### Using DynamicGrooidClassLoader
 
 ```kotlin
-val classLoader = DynamicGrooidDexClassLoader(this.classLoader)
+val classLoader = DynamicGrooidClassLoader(this.classLoader)
 val scriptClass =
     kotlin.runCatching { classLoader.parseClass(groovyCode) as Class<Script> }
         .onFailure {
