@@ -6,7 +6,7 @@ Run Groovy in Android, compile groovy code to dex using D8 and run it in Android
 ## Quick Start
 
 ```groovy
-implementation "io.github.dingyi222666:groovy-android:1.0.7-beta1"
+implementation "io.github.dingyi222666:groovy-android:1.0.7-beta4"
 ```
 
 ### ~~Using ScriptFactory~~
@@ -38,6 +38,23 @@ val scriptClass =
 scriptClass.newInstance().run()
 ```
 
+or use java
+
+```java
+DynamicGrooidClassLoader classLoader = new DynamicGrooidClassLoader(this.getClass().getClassLoader(), null, false);
+
+try {
+    //your groovyCode here
+    String groovyCode = "";
+
+    Class<Script> scriptClass = classLoader.parseClass(groovyCode);
+    
+    scriptClass.newInstance().run();
+} catch (Exception e) {
+     //do something in parseClass failure
+}
+
+```
 
 ### TODO
  - [x] Support caching dex 
